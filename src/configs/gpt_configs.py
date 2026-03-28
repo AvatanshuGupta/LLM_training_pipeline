@@ -8,6 +8,16 @@ GPT_CONFIG_124M = {
     "qkv_bias": False       # Query-Key-Value bias
 }
 
+GPT_CONFIG_90M = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "emb_dim": 640,        # reduced from 768
+    "n_heads": 10,         # must divide emb_dim
+    "n_layers": 10,        # reduced from 12
+    "drop_rate": 0.1,
+    "qkv_bias": False
+}
+
 BASE_CONFIG = {
     "vocab_size": 50257,     # Vocabulary size
     "context_length": 1024,  # Context length
