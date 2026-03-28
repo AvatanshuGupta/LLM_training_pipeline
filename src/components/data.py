@@ -1,4 +1,5 @@
 import torch
+import random
 from torch.utils.data import Dataset, IterableDataset
 from torch.utils.data import DataLoader
 from src.instructFT import format_input
@@ -35,25 +36,21 @@ class GptDataset(Dataset):
 
 class StreamingGptDataset(IterableDataset):
     """Streams data from files without loading everything into RAM."""
-    def __init__(self, folder_paths, tokenizer, max_length=256, stride=128, chunk_size=8192):
-        self.folder_paths = folder_paths if isinstance(folder_paths, list) else [folder_paths]
+    def __init__(self, file_paths, tokenizer, max_length=256, stride=128, chunk_size=32768):
+        self.file_paths = file_paths
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.stride = stride
         self.chunk_size = chunk_size  # Characters to process at once
 
-        # Validate folder existence
-        for fp in self.folder_paths:
+        # Validate file existence
+        for fp in self.file_paths:
             if not Path(fp).exists():
-                raise FileNotFoundError(f"Data folder not found: {fp}")
+                raise FileNotFoundError(f"File not found: {fp}")
 
     def _load_txt_files(self):
-        """Generator that yields txt files from folders."""
-        for folder_path in self.folder_paths:
-            folder = Path(folder_path)
-            if folder.exists():
-                for txt_file in sorted(folder.glob("**/*.txt")):
-                    yield txt_file
+        for file in self.file_paths:
+            yield file
 
     def _process_file_chunks(self, filepath):
         """Generator that yields tokenized chunks from a file with context preservation."""
@@ -74,7 +71,7 @@ class StreamingGptDataset(IterableDataset):
                                     yield tokens[i:i+self.max_length+1]
                         break
 
-                    buffer += chunk
+                    buffer += chunk + "<|endoftext|>"
 
                     # Process when buffer is large enough
                     if len(buffer) >= self.chunk_size:
@@ -83,7 +80,10 @@ class StreamingGptDataset(IterableDataset):
                         main_part = buffer[:split_point]
                         overlap_part = buffer[split_point:]
 
-                        tokens = self.tokenizer.encode(main_part, allowed_special={"<|endoftext|>"})
+                        tokens = self.tokenizer.encode(
+                            buffer + "<|endoftext|>",
+                            allowed_special={"<|endoftext|>"}
+                        )
 
                         # Yield sliding windows
                         for i in range(0, max(1, len(tokens) - self.max_length + 1), self.stride):
@@ -98,12 +98,14 @@ class StreamingGptDataset(IterableDataset):
             # Log but continue - don't block training
 
     def __iter__(self):
-        """Stream data samples without loading entire dataset."""
-        for filepath in self._load_txt_files():
+        files = list(self._load_txt_files())
+        random.shuffle(files)
+
+        for filepath in files:
             for tokens in self._process_file_chunks(filepath):
                 if len(tokens) > self.max_length:
-                    input_ids = torch.tensor(tokens[:self.max_length])
-                    target_ids = torch.tensor(tokens[1:self.max_length+1])
+                    input_ids = torch.tensor(tokens[:self.max_length], dtype=torch.long)
+                    target_ids = torch.tensor(tokens[1:self.max_length+1], dtype=torch.long)
                     yield input_ids, target_ids
     
 

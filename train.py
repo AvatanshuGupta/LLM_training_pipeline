@@ -1,6 +1,6 @@
-import os
 import torch
 import tiktoken
+import random
 from pathlib import Path
 from src.components.architecture import GPTModel
 from src.configs.gpt_configs import GPT_CONFIG_90M
@@ -8,61 +8,29 @@ from src.dataloader import create_dataloaders
 from src.modelFunction.evalAndTrain import model_train_simple
 
 
-def get_data_folders(data_root="data"):
-    """
-    Get all data folders. Expects structure with data sources.
-    For train/val split with streaming, separate into:
-    - data/train/ and data/val/ (recommended)
-    OR
-    - Uses all data folders and splits files internally
-    """
-    data_sources = ["webtext", "books", "code", "stackexchange"]
 
-    # Check if separate train/val directories exist
-    train_root = os.path.join(data_root, "train")
-    val_root = os.path.join(data_root, "val")
+def get_train_val_files(data_root="data", split_ratio=0.9):
+    all_files = []
 
-    if os.path.exists(train_root) and os.path.exists(val_root):
-        # Separate train/val structure
-        print("[*] Found separate train/val directories")
-        train_folders = [os.path.join(train_root, src) for src in data_sources
-                        if os.path.exists(os.path.join(train_root, src))]
-        val_folders = [os.path.join(val_root, src) for src in data_sources
-                       if os.path.exists(os.path.join(val_root, src))]
-        return train_folders, val_folders
+    for path in Path(data_root).glob("**/*.txt"):
+        all_files.append(str(path))
 
-    # Single data directory - split files per source
-    print("[*] Using single data directory with per-source split")
-    train_folders = []
-    val_folders = []
+    if len(all_files) == 0:
+        raise ValueError(f"No .txt files found in {data_root}")
 
-    print("    Scanning data folders...")
-    for source in data_sources:
-        source_path = os.path.join(data_root, source)
-        if os.path.exists(source_path):
-            files = sorted(list(Path(source_path).glob("**/*.txt")))
-            num_files = len(files)
-            print(f"      {source}: {num_files} files")
+    print(f"[*] Total files found: {len(all_files)}")
 
-            if num_files > 0:
-                # Split 90/10
-                split_idx = max(1, int(num_files * 0.9))
-                train_files = files[:split_idx]
-                val_files = files[split_idx:]
+    random.shuffle(all_files)
 
-                if len(train_files) > 0:
-                    train_folders.append(source_path)
-                if len(val_files) > 0:
-                    val_folders.append(source_path)
+    split_idx = int(len(all_files) * split_ratio)
 
-    print(f"\n[✓] Data folders identified:")
-    print(f"    Train sources: {len(train_folders)}")
-    print(f"    Val sources: {len(val_folders)}")
+    train_files = all_files[:split_idx]
+    val_files = all_files[split_idx:]
 
-    if not train_folders:
-        raise ValueError(f"No training data found in {data_root}")
+    print(f"[✓] Train files: {len(train_files)}")
+    print(f"[✓] Val files: {len(val_files)}")
 
-    return train_folders, val_folders
+    return train_files, val_files
 
 
 def main():
@@ -89,10 +57,10 @@ def main():
 
     # Get data folder paths
     print("\n[*] Identifying data folders...")
-    train_folders, val_folders = get_data_folders(data_root="data")
+    train_files, val_files = get_train_val_files("data")
 
     # Check if we have validation data
-    if not val_folders:
+    if not val_files:
         print("\n[!] WARNING: No validation data found!")
         print("    Consider creating data/val/ directory or splitting data manually")
 
@@ -106,23 +74,23 @@ def main():
         max_length=max_length,
         stride=stride,
         use_streaming=True,
-        data_folder=train_folders
+        file_paths=train_files
     )
 
     val_loader = None
-    if val_folders:
+    if val_files:
         val_loader = create_dataloaders(
             tokenizer=tokenizer,
             batch_size=batch_size,
             max_length=max_length,
             stride=stride,
             use_streaming=True,
-            data_folder=val_folders
+            file_paths=val_files
         )
 
     print(f"[✓] Dataloaders ready:")
-    print(f"    Train: {len(train_folders)} source(s)")
-    print(f"    Val: {len(val_folders)} source(s)" if val_folders else "    Val: NONE (skipping validation)")
+    print(f"    Train: {len(train_files)} source(s)")
+    print(f"    Val: {len(val_files)} source(s)" if val_files else "    Val: NONE (skipping validation)")
 
     # Initialize model
     print("\n[*] Initializing GPT-90M model...")
@@ -168,7 +136,7 @@ def main():
         print("No evaluation checkpoints reached (dataset too small or eval_freq too large)")
     print(f"\nSaved models:")
     print(f"  - Best model: checkpoints/best_model.pth")
-    print(f"  - Final model: final_model.pth")
+    print(f"  - Final model: checkpoints/final_model.pth")
     print(f"  - Latest checkpoint: checkpoints/latest.pth")
 
 

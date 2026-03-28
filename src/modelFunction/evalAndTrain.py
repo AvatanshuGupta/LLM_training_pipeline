@@ -1,6 +1,5 @@
 import torch
 from .loss import cal_loss_loader,calc_loss_batch
-from .run import generate_and_print_sample
 import mlflow
 import dagshub
 from src.utils import save_checkpoint,load_checkpoint
@@ -10,9 +9,10 @@ import os
 
 # Initialize DagsHub tracking with error handling
 MLFLOW_AVAILABLE = False
+MAX_STEPS=50000
 try:
-    repo_owner = os.getenv("DAGSHUB_REPO_OWNER", "avatanshugupta")
-    repo_name = os.getenv("DAGSHUB_REPO_NAME", "LLM_training_pipeline")
+    repo_owner = "avatanshugupta"
+    repo_name = "LLM_training_pipeline"
     dagshub.init(repo_owner=repo_owner, repo_name=repo_name, mlflow=True)
     mlflow.set_experiment("llm-training")
     MLFLOW_AVAILABLE = True
@@ -36,7 +36,8 @@ def evaluate_model(model,train_loader,val_loader,device,eval_iter):
 
 def model_train_simple(model,train_loader,val_loader,optimizer,device,
                        num_epochs,eval_freq,eval_iter):
-
+    
+    global MLFLOW_AVAILABLE
     scaler = GradScaler(enabled=(device.type == "cuda"))
 
     train_losses,val_losses,track_tokens_seen=[],[],[]
@@ -44,8 +45,12 @@ def model_train_simple(model,train_loader,val_loader,optimizer,device,
     best_val_loss = float("inf")
 
     # Load checkpoint
-    global_step, start_epoch, tokens_seen, best_val_loss = load_checkpoint(model, optimizer)
     model.to(device)
+    global_step, start_epoch, tokens_seen, best_val_loss = load_checkpoint(model, optimizer)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=MAX_STEPS
+    )
+    
 
     mlflow_context = None
     if MLFLOW_AVAILABLE:
@@ -64,11 +69,13 @@ def model_train_simple(model,train_loader,val_loader,optimizer,device,
 
             for input_batch,target_batch in train_loader:
                 optimizer.zero_grad()
+                input_batch = input_batch.to(device)
+                target_batch = target_batch.to(device)
 
                 with autocast(device_type=device.type):
                     loss = calc_loss_batch(input_batch, target_batch, model, device)
 
-                if torch.isnan(loss):
+                if torch.isnan(loss).any():
                     print("NaN detected, skipping step")
                     continue
 
@@ -79,9 +86,13 @@ def model_train_simple(model,train_loader,val_loader,optimizer,device,
 
                 scaler.step(optimizer)
                 scaler.update()
+                scheduler.step()
 
                 tokens_seen+=input_batch.numel()
                 global_step+=1
+                if global_step >= MAX_STEPS:
+                    print("Stopping training at max steps")
+                    return train_losses, val_losses, track_tokens_seen
 
                 # MLflow logging
                 if MLFLOW_AVAILABLE and global_step % 50 == 0:
@@ -103,7 +114,11 @@ def model_train_simple(model,train_loader,val_loader,optimizer,device,
                           f"Train loss {train_loss:.3f}, Val loss {val_loss:.3f}")
 
                     # Save best model (skip if val_loss is NaN)
-                    is_best = val_loss < best_val_loss and not (val_loss != val_loss)
+                    is_best = (
+                        val_loader is not None and
+                        val_loss == val_loss and
+                        val_loss < best_val_loss
+                    )
                     if is_best:
                         best_val_loss = val_loss
                         os.makedirs("checkpoints", exist_ok=True)
@@ -124,7 +139,8 @@ def model_train_simple(model,train_loader,val_loader,optimizer,device,
                             print(f"[!] MLflow metrics failed: {e}")
 
                     # Save checkpoint
-                    save_checkpoint(model, optimizer, global_step, epoch, tokens_seen, best_val_loss)
+                    if global_step % 1000 == 0:
+                        save_checkpoint(model, optimizer, global_step, epoch, tokens_seen, best_val_loss)
 
         # Save final model
         os.makedirs("checkpoints", exist_ok=True)
