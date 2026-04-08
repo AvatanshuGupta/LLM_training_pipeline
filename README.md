@@ -1,8 +1,4 @@
 
-# Project Title
-
-A brief description of what this project does and who it's for
-
 # LLM Training Pipeline
 
 A comprehensive GPT-style Language Model training pipeline built with PyTorch. This project provides a flexible, memory-efficient framework for training transformer-based language models from scratch or fine-tuning existing architectures.
